@@ -15,21 +15,29 @@ class Device(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     hardware_id: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
     display_name: Mapped[str | None] = mapped_column(String(100))
-    location: Mapped[str | None] = mapped_column(String(100))
+    location_id: Mapped[int | None] = mapped_column(ForeignKey("locations.id"), nullable=True)
     status: Mapped[DeviceStatus] = mapped_column(Enum(DeviceStatus), default=DeviceStatus.PENDING)
     is_online: Mapped[bool] = mapped_column(Boolean, default=False)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    # Relationship to telemetry
     readings: Mapped[list["TelemetryReading"]] = relationship(back_populates="device")
+    location: Mapped["Location"] = relationship(back_populates="devices")
+    
 
 class TelemetryReading(Base):
     __tablename__ = "telemetry_data"
 
-    # Primary key is composite: (timestamp, device_id, metric)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True, server_default=func.now())
     device_id: Mapped[int] = mapped_column(ForeignKey("devices.id"), primary_key=True)
     metric: Mapped[str] = mapped_column(String(50), primary_key=True)
     value: Mapped[float] = mapped_column(Float, nullable=False)
+    location_snapshot: Mapped[str] = mapped_column(String, nullable=False)
 
     device: Mapped["Device"] = relationship(back_populates="readings")
+
+class Location(Base):
+    __tablename__ = "locations"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    display_name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    
+    devices: Mapped[list["Device"]] = relationship(back_populates="location")

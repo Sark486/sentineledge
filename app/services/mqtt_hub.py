@@ -1,11 +1,12 @@
+from app.infrastructure.service_factories import create_telemetry_service, create_device_service
 from typing import Any
 import json
 import asyncio
-from datetime import datetime, timezone
 import aiomqtt
 from app.infrastructure.db import async_session_maker
-from app.infrastructure.repositories import DeviceRepository
 from app.infrastructure.models import DeviceStatus, Device
+from app.services.telemetry_service import TelemetryService
+from app.services.device_service import DeviceService
 
 class MQTTHub:
     def __init__(self, broker_host: str = "localhost"):
@@ -15,7 +16,7 @@ class MQTTHub:
     async def start(self):
         while True:
             try:
-                async with aiomqtt.Client(self.broker_host) as client:
+                async with aiomqtt.Client(self.broker_host, clean_session=True) as client:
                     await client.subscribe(self.topic_filter)
                     async for message in client.messages:
                         await self._handle_message(message)
@@ -28,7 +29,7 @@ class MQTTHub:
 
         try:
             payload: Any = json.loads(message.payload.decode())
-            print(f"MQTT Listener: received message {payload}")
+            print(f"MQTT Listener: received message {payload} on topic {message.topic}")
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             print(f"MQTT Listener: ERROR {e}")
             return
@@ -36,15 +37,14 @@ class MQTTHub:
         async with async_session_maker() as session:
             try:
                 print("MQTT Listener: storing to DB ")
-                repo = DeviceRepository(session)
-                
-                device: Device = await repo.get_or_create_device(hardware_id)
+                telemetry_service: TelemetryService = create_telemetry_service(session)
+                device_service: DeviceService = create_device_service(session)
+
+                device: Device = await device_service.get_or_create_device(hardware_id)
                 
                 if device.status == DeviceStatus.ACTIVE:
-                    await repo.add_telemetry(device.id, payload)
-                    
-                    device.is_online = True
-                    device.last_seen = datetime.now(timezone.utc)
+                    await telemetry_service.save_telemetry(device.id, payload)
+                    await device_service.mark_online(device.id)
                 
                 await session.commit()
             except Exception as e:

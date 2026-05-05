@@ -11,5 +11,9 @@
             "database": "sentinel",
             "username": "user"
         }
-    ]
+    ],
+    "python.analysis.packageIndexDepths": [
+    { "name": "", "depth": 4 }
+  ],
+  "python.analysis.extraPaths": ["./app"]
 }

@@ -1,57 +1,42 @@
+from app.core.deps import get_device_service, get_telemetry_service
+from typing import Any
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-from app.infrastructure.db import get_db_session
-from app.infrastructure.models import TelemetryReading
 from app.services.device_service import DeviceService
+from app.services.telemetry_service import TelemetryService
 from app.exceptions.sentinet_not_found_error import SentinelNotFoundError
-from app.infrastructure.models import Device
+from app.api.schemas import DeviceRead, DeviceUpdate
 
 router = APIRouter(prefix="/devices", tags=["Devices"])
 
-@router.get("/")
-async def list_devices(db: AsyncSession = Depends(get_db_session)):
-    service = DeviceService(db)
+@router.get("/", response_model=list[DeviceRead])
+async def list_devices(service: DeviceService = Depends(get_device_service)) -> Any:
     return await service.list_devices()
 
-@router.get("/{device_id}")
-async def get_device(device_id: int, db: AsyncSession = Depends(get_db_session)) -> Device:
-    service = DeviceService(db)
-    device = await service.get_device(device_id)
+@router.get("/{device_id}", response_model=DeviceRead)
+async def get_device(device_id: int, service: DeviceService = Depends(get_device_service)) -> Any:
+    device = await service.get_device_by_id(device_id)
     if not device:
         raise SentinelNotFoundError
     return device
 
-@router.patch("/{device_id}/activate")
-async def activate_device(device_id: int, db: AsyncSession = Depends(get_db_session)):
-    service = DeviceService(db)
-    device = await service.activate_device(device_id)
+@router.patch("/{device_id}", response_model=DeviceRead)
+async def update_device(
+    device_id: int, 
+    update_data: DeviceUpdate,
+    service: DeviceService = Depends(get_device_service)
+) -> Any:
+    device = await service.update_device(device_id, update_data)
+    
     if not device:
         raise SentinelNotFoundError
-    return {"message": f"Device {device.hardware_id} is now ACTIVE"}
-
-@router.patch("/{device_id}/block")
-async def block_device(device_id: int, db: AsyncSession = Depends(get_db_session)):
-    service = DeviceService(db)
-    device = await service.block_device(device_id)
-    if not device:
-        raise SentinelNotFoundError
-    return {"message": f"Device {device.hardware_id} is now BLOCKED"}
+        
+    return device
 
 @router.get("/{device_id}/latest")
-async def get_latest_data(device_id: int, db: AsyncSession = Depends(get_db_session)):
-    subquery = (
-        select(TelemetryReading.timestamp)
-        .where(TelemetryReading.device_id == device_id)
-        .order_by(TelemetryReading.timestamp.desc())
-        .limit(1)
-        .scalar_subquery()
-    )
+async def get_latest_telemetry_data(device_id: int, service: TelemetryService = Depends(get_telemetry_service)):
+    latest = await service.get_latest_telemetry_by_device(device_id)
     
-    result = await db.execute(
-        select(TelemetryReading).where(
-            TelemetryReading.device_id == device_id,
-            TelemetryReading.timestamp == subquery
-        )
-    )
-    return result.scalars().all()
+    if not latest:
+        raise SentinelNotFoundError
+    
+    return latest
