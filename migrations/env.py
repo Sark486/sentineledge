@@ -35,8 +35,23 @@ target_metadata: MetaData = Base.metadata
 def get_url() -> str:
     return str(settings.database_url)
 
+def include_object(object, name, type_, reflected, compare_to):
+    """
+    Exclude tables backed by hand-managed materialized views (continuous
+    aggregates) from autogenerate diffing. Their ORM classes must inherit
+    from Base to be queryable, which puts them in target_metadata, but they
+    aren't real tables Alembic should ever CREATE/DROP.
+    """
+    if type_ == "table" and object.info.get("skip_autogenerate"):
+        return False
+    return True
+
 def do_run_migrations(connection):
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        include_object=include_object,
+    )
 
     with context.begin_transaction():
         context.run_migrations()
@@ -59,6 +74,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_object=include_object,
     )
 
     with context.begin_transaction():

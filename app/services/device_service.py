@@ -1,5 +1,4 @@
 from datetime import datetime, timezone
-from app.domain.events import DeviceEvents
 from typing import Sequence
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.infrastructure.models import Device
@@ -14,6 +13,9 @@ class DeviceService():
 
     async def list_devices(self) -> Sequence[Device]:
         return await self.repo.list_all()
+
+    async def count_devices(self) -> int:
+        return await self.repo.count_all()
     
     async def get_device_by_id(self, device_id: int) -> Device | None:
         return await self.repo.get_by_id(device_id)

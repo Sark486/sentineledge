@@ -1,8 +1,10 @@
 from app.infrastructure.service_factories import create_telemetry_service, create_device_service
+from app.domain.sensors import EnvironmentalData
 from typing import Any
 import json
 import asyncio
 import aiomqtt
+from pydantic import ValidationError
 from app.infrastructure.db import async_session_maker
 from app.infrastructure.models import DeviceStatus, Device
 from app.services.telemetry_service import TelemetryService
@@ -20,7 +22,8 @@ class MQTTHub:
                     await client.subscribe(self.topic_filter)
                     async for message in client.messages:
                         await self._handle_message(message)
-            except aiomqtt.MqttError:
+            except aiomqtt.MqttError as e:
+                print(f"MQTT Listener: connection error ({e}), retrying in 5s")
                 await asyncio.sleep(5)
 
     async def _handle_message(self, message: aiomqtt.Message):
@@ -34,6 +37,14 @@ class MQTTHub:
             print(f"MQTT Listener: ERROR {e}")
             return
 
+        payload.pop("source", None)
+
+        try:
+            climate_data = EnvironmentalData(source=hardware_id, **payload)
+        except ValidationError as e:
+            print(f"MQTT Listener: Invalid climate data {e}")
+            return
+
         async with async_session_maker() as session:
             try:
                 print("MQTT Listener: storing to DB ")
@@ -41,11 +52,11 @@ class MQTTHub:
                 device_service: DeviceService = create_device_service(session)
 
                 device: Device = await device_service.get_or_create_device(hardware_id)
-                
+
                 if device.status == DeviceStatus.ACTIVE:
-                    await telemetry_service.save_telemetry(device.id, payload)
+                    await telemetry_service.save_telemetry(device.id, climate_data)
                     await device_service.mark_online(device.id)
-                
+
                 await session.commit()
             except Exception as e:
                 print(f"!!! MQTT HANDLER CRASHED !!! Error: {e}")

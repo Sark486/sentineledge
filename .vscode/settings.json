@@ -6,6 +6,7 @@
             "previewLimit": 50,
             "server": "localhost",
             "port": 5432,
+            "askForPassword": true,
             "driver": "PostgreSQL",
             "name": "Sentinel",
             "database": "sentinel",
@@ -15,5 +16,10 @@
     "python.analysis.packageIndexDepths": [
     { "name": "", "depth": 4 }
   ],
-  "python.analysis.extraPaths": ["./app"]
+"python.analysis.extraPaths": [
+    "./app"
+],
+"chat.tools.terminal.autoApprove": {
+    "npm run build": true
+}
 }

@@ -9,6 +9,7 @@ dependencies = [
     "alembic>=1.18.4",
     "asyncpg>=0.31.0",
     "fastapi[standard]",
+    "opencv-contrib-python>=4.13.0.92",
     "pydantic-settings>=2.14.0",
     "redis>=7.4.0",
     "sense-hat>=2.6.0",
@@ -26,3 +27,6 @@ dev = [
 [[tool.mypy.overrides]]
 module = "sense_hat.*"
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

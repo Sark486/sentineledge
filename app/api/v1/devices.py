@@ -4,13 +4,20 @@ from fastapi import APIRouter, Depends
 from app.services.device_service import DeviceService
 from app.services.telemetry_service import TelemetryService
 from app.exceptions.sentinet_not_found_error import SentinelNotFoundError
-from app.api.schemas import DeviceRead, DeviceUpdate
+from app.api.schemas import DeviceRead, DeviceUpdate, PaginatedResponse
 
 router = APIRouter(prefix="/devices", tags=["Devices"])
 
-@router.get("/", response_model=list[DeviceRead])
+@router.get("/", response_model=PaginatedResponse[DeviceRead])
 async def list_devices(service: DeviceService = Depends(get_device_service)) -> Any:
-    return await service.list_devices()
+    count = await service.count_devices()
+    devices = await service.list_devices()
+    return PaginatedResponse(
+        count=count,
+        limit=count,  # For list_all, limit is the total count
+        offset=0,
+        data=list(devices)
+    )
 
 @router.get("/{device_id}", response_model=DeviceRead)
 async def get_device(device_id: int, service: DeviceService = Depends(get_device_service)) -> Any:
