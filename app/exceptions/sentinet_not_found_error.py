@@ -1,0 +1,2 @@
+class SentinelNotFoundError(Exception): 
+    pass
