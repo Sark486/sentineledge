@@ -1,32 +1,13 @@
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, Any
 from datetime import datetime
-from app.infrastructure.db import get_db_session
-from app.core.deps import get_sensor_adapter, get_telemetry_service
+from app.core.deps import get_telemetry_service
 from app.domain.intervals import Interval
-from app.domain.sensors import EnvironmentalData
 from app.services.telemetry_service import TelemetryService
 from app.api.schemas import ClimateReadingRead, CurrentReadingRead, PaginatedResponse, SeriesPoint, SeriesResponse
 
 router = APIRouter(prefix="/telemetry", tags=["Telemetry"])
 
-@router.get("/current")
-async def get_current_telemetry(
-    adapter=Depends(get_sensor_adapter),
-    db: AsyncSession = Depends(get_db_session)
-):
-    """
-    Get current telemetry data from hardware sensor.
-    """
-    # Get data from hardware
-    data: EnvironmentalData = adapter.read_data()
-    
-    # # Persist to TimescaleDB
-    # repo = TelemetryRepository(db)
-    # await repo.save_reading(data)
-    
-    return data
 
 @router.get("", response_model=PaginatedResponse[ClimateReadingRead])
 async def list_telemetry(
