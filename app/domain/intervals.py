@@ -53,12 +53,13 @@ class ResolvedInterval:
 
 
 def default_for_duration(duration: timedelta) -> Interval:
-    """Readability default when the caller didn't request a specific interval."""
-    if duration <= timedelta(hours=20):
+    """Readability default when the caller didn't request a specific interval.
+
+    Must be monotonic: a longer range never resolves to a finer interval.
+    """
+    if duration <= timedelta(hours=6):
         return Interval.ONE_MIN
     if duration <= timedelta(days=2):
-        return Interval.ONE_HOUR
-    if duration <= timedelta(days=30):
         return Interval.FIVE_MIN
     return Interval.ONE_HOUR
 

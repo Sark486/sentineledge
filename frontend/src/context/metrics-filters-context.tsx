@@ -6,45 +6,41 @@ import {
   useState,
   type PropsWithChildren,
 } from "react";
-import type { Interval } from "../api/types";
+import { CLIMATE_METRIC_KEYS, type Interval } from "../api/types";
+import type { DatePreset } from "../lib/chart-time";
 
-export type ChartStyle = "dots" | "line" | "both";
-export type DatePreset = "custom" | "1h" | "1d" | "1w" | "1m";
+export type ChartStyle = "line" | "area" | "step";
+export type { DatePreset };
 
 export interface MetricsFiltersState {
-  metric: string;
+  /** Metrics shown on the chart; selection only affects display, not the query. */
+  metrics: string[];
   deviceId: string;
   location: string;
   datePreset: DatePreset;
-  startDate: string;
-  endDate: string;
-  brushRangeMs: { startMs: number; endMs: number } | null;
+  /** Explicit window used when datePreset is "custom" (brush, zoom or Apply). */
+  customRangeMs: { startMs: number; endMs: number } | null;
   interval: Interval | "auto";
   chartStyle: ChartStyle;
   tablesExpanded: boolean;
 }
 
 const defaultState: MetricsFiltersState = {
-  metric: "",
+  metrics: [...CLIMATE_METRIC_KEYS],
   deviceId: "",
   location: "",
   datePreset: "1d",
-  startDate: "",
-  endDate: "",
-  brushRangeMs: null,
+  customRangeMs: null,
   interval: "auto",
   chartStyle: "line",
   tablesExpanded: false,
 };
 
 interface MetricsFiltersContextValue extends MetricsFiltersState {
-  setMetric: (value: string) => void;
+  setMetrics: (value: string[]) => void;
   setDeviceId: (value: string) => void;
   setLocation: (value: string) => void;
   setDatePreset: (value: DatePreset) => void;
-  setStartDate: (value: string) => void;
-  setEndDate: (value: string) => void;
-  setBrushRangeMs: (value: { startMs: number; endMs: number } | null) => void;
   setInterval: (value: Interval | "auto") => void;
   setChartStyle: (value: ChartStyle) => void;
   setTablesExpanded: (value: boolean) => void;
@@ -63,16 +59,11 @@ export function MetricsFiltersProvider({ children }: PropsWithChildren) {
   const value = useMemo<MetricsFiltersContextValue>(
     () => ({
       ...state,
-      setMetric: (metric) => patch({ metric }),
+      setMetrics: (metrics) => patch({ metrics }),
       setDeviceId: (deviceId) => patch({ deviceId }),
       setLocation: (location) => patch({ location }),
       setDatePreset: (datePreset) =>
-        patch({ datePreset, brushRangeMs: null, interval: "auto" }),
-      setStartDate: (startDate) =>
-        patch({ startDate, datePreset: "custom", brushRangeMs: null, interval: "auto" }),
-      setEndDate: (endDate) =>
-        patch({ endDate, datePreset: "custom", brushRangeMs: null, interval: "auto" }),
-      setBrushRangeMs: (brushRangeMs) => patch({ brushRangeMs }),
+        patch({ datePreset, customRangeMs: null, interval: "auto" }),
       setInterval: (interval) => patch({ interval }),
       setChartStyle: (chartStyle) => patch({ chartStyle }),
       setTablesExpanded: (tablesExpanded) => patch({ tablesExpanded }),
@@ -81,9 +72,7 @@ export function MetricsFiltersProvider({ children }: PropsWithChildren) {
         const end = Math.max(startMs, endMs);
         patch({
           datePreset: "custom",
-          brushRangeMs: { startMs: start, endMs: end },
-          startDate: msToDateInput(start),
-          endDate: msToDateInput(end),
+          customRangeMs: { startMs: start, endMs: end },
           interval: "auto",
         });
       },
@@ -102,10 +91,4 @@ export function useMetricsFilters(): MetricsFiltersContextValue {
     throw new Error("useMetricsFilters must be used within MetricsFiltersProvider");
   }
   return ctx;
-}
-
-function msToDateInput(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }

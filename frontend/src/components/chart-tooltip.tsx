@@ -1,18 +1,44 @@
 import type { TooltipProps } from "recharts";
 import { formatDateTime, formatMetricValue, metricUnit } from "../lib/utils";
 
+type ChartTooltipProps = TooltipProps<number, string> & {
+  /**
+   * When set, the tooltip lists these metrics read from the hovered data row
+   * (every chart row carries all metric columns) instead of only the series
+   * of the hovered panel — so hovering any panel shows the full picture.
+   */
+  metricKeys?: string[];
+  metricColors?: Record<string, string>;
+};
+
 export function ChartTooltip({
   active,
   payload,
   label,
-}: TooltipProps<number, string>) {
-  if (!active || !payload) {
+  metricKeys,
+  metricColors,
+}: ChartTooltipProps) {
+  if (!active || !payload || payload.length === 0) {
     return null;
   }
 
-  // Extract timestamp from the first payload item
-  const timestamp = payload?.[0]?.payload?.time as number | undefined;
+  const row = payload[0]?.payload as Record<string, unknown> | undefined;
+  const timestamp = row?.time as number | undefined;
   const timeLabel = timestamp != null ? formatDateTime(new Date(timestamp).toISOString()) : label;
+
+  const entries = metricKeys
+    ? metricKeys
+        .map((key) => ({
+          name: key,
+          value: row?.[key],
+          color: metricColors?.[key] ?? "#0284c7",
+        }))
+        .filter((e): e is { name: string; value: number; color: string } => typeof e.value === "number")
+    : payload.map((entry) => ({
+        name: String(entry.name),
+        value: entry.value,
+        color: entry.color,
+      }));
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-2xl">
@@ -23,15 +49,14 @@ export function ChartTooltip({
 
       {/* Metrics list */}
       <div className="space-y-2.5">
-        {payload.map((entry, index) => {
-          const value = entry.value;
-          const metricName = String(entry.name);
-          const unit = metricUnit(metricName);
-          const formattedValue = typeof value === "number" ? formatMetricValue(metricName, value) : value;
+        {entries.map((entry, index) => {
+          const unit = metricUnit(entry.name);
+          const formattedValue =
+            typeof entry.value === "number" ? formatMetricValue(entry.name, entry.value) : entry.value;
 
           return (
             <div
-              key={`${metricName}-${index}`}
+              key={`${entry.name}-${index}`}
               className="flex items-center justify-between gap-4 rounded-lg bg-slate-50 px-3 py-2"
             >
               <div className="flex items-center gap-2.5">
@@ -42,7 +67,7 @@ export function ChartTooltip({
                 />
                 {/* Metric name */}
                 <span className="text-sm font-semibold text-slate-700 capitalize">
-                  {metricName}
+                  {entry.name}
                 </span>
               </div>
 
@@ -59,10 +84,9 @@ export function ChartTooltip({
       </div>
 
       {/* Empty state */}
-      {payload.length === 0 && (
+      {entries.length === 0 && (
         <p className="text-xs text-slate-500 text-center py-2">No data available</p>
       )}
     </div>
   );
 }
-
