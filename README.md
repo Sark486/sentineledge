@@ -22,6 +22,38 @@ Home environment monitoring system running on a Raspberry Pi. IoT devices publis
 | Camera agent | Picamera2, OpenCV, FastAPI (its own project under `agent/`) |
 | Tooling | uv, ruff, mypy, pytest |
 
+## How to deploy and run
+
+First-time setup (or after pulling changes that touch dependencies/migrations):
+
+```bash
+./scripts/deploy.sh
+```
+
+This starts the database and MQTT broker, applies migrations, and builds the backend/frontend
+images. It does not start the application itself, so it's safe to re-run any time — it's
+idempotent.
+
+Then, day to day:
+
+```bash
+./scripts/start-all.sh   # starts db, mosquitto, backend, frontend, and the camera agent
+./scripts/stop-all.sh    # stops all of the above
+```
+
+The camera agent runs natively on the host (it needs the Pi's camera and can't run in a
+container) and keeps running after you close the terminal. To control it on its own:
+
+```bash
+./scripts/agent-start.sh
+./scripts/agent-stop.sh
+```
+
+Agent output is logged to `scripts/logs/agent.log`.
+
+See "Getting started" below to run pieces individually, e.g. with the backend/frontend on the
+host instead of in containers.
+
 ## Getting started
 
 ### Prerequisites
