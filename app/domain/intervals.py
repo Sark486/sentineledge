@@ -20,7 +20,7 @@ RETENTION_5M = timedelta(days=30)
 ONLINE_WINDOW = timedelta(minutes=10)
 
 
-class Interval(str, enum.Enum):
+class Interval(enum.StrEnum):
     ONE_MIN = "1m"
     FIVE_MIN = "5m"
     ONE_HOUR = "1h"

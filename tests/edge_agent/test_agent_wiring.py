@@ -189,7 +189,8 @@ async def test_lifespan_starts_the_sink_and_the_power_loop(settings, monkeypatch
 async def test_lifespan_shuts_the_capture_thread_down(settings):
     capture = StubCapture()
     sink = TrackingSink()
-    app = build_app(settings, as_capture(capture), PowerManager(settings, as_capture(capture)), as_sink(sink))
+    power = PowerManager(settings, as_capture(capture))
+    app = build_app(settings, as_capture(capture), power, as_sink(sink))
 
     async with app.router.lifespan_context(app):
         pass

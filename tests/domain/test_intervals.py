@@ -1,5 +1,5 @@
 from dataclasses import FrozenInstanceError
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -11,7 +11,7 @@ from app.domain.intervals import (
     retention_floor,
 )
 
-NOW = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
 
 
 def test_last_few_hours_defaults_to_one_minute():
@@ -197,4 +197,4 @@ def test_resolved_interval_is_immutable():
     resolved = resolve_interval(None, NOW - timedelta(hours=1), NOW, NOW)
 
     with pytest.raises(FrozenInstanceError):
-        setattr(resolved, "interval", Interval.ONE_HOUR)
+        resolved.interval = Interval.ONE_HOUR  # type: ignore

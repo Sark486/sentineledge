@@ -1,11 +1,10 @@
-from datetime import datetime, timedelta, timezone
-
-import pytest
+from datetime import UTC, datetime, timedelta
 
 from app.api.schemas import DeviceUpdate
+from app.domain.devices import DEFAULT_LOCATION_NAME, LIVENESS_REFRESH
 from app.infrastructure.models import DeviceStatus
-from app.services.device_service import DeviceService
 from app.infrastructure.repositories import DeviceRepository, LocationRepository
+from app.services.device_service import DeviceService
 from tests.fakes import (
     FakeDeviceRepository,
     FakeLocationRepository,
@@ -41,12 +40,6 @@ async def test_list_devices_returns_every_device():
     assert list(await service.list_devices()) == devices
 
 
-async def test_count_devices_returns_the_repository_total():
-    service, _, _, _ = build_service([make_device(1), make_device(2), make_device(3)])
-
-    assert await service.count_devices() == 3
-
-
 async def test_get_device_by_id_returns_the_match():
     wanted = make_device(2, "pi-02")
     service, _, _, _ = build_service([make_device(1, "pi-01"), wanted])
@@ -65,21 +58,14 @@ async def test_get_device_by_id_returns_none_when_absent():
 # --------------------------------------------------------------------------- #
 
 
-async def test_create_device_commits():
+async def test_create_device_delegates_to_the_repository():
     service, session, device_repo, _ = build_service()
 
     device = await service.create_device("pi-new", location_id=5)
 
     assert device_repo.created == [("pi-new", 5)]
-    assert session.commits == 1
     assert device.hardware_id == "pi-new"
-
-
-async def test_create_device_does_not_commit_when_the_repository_returns_nothing():
-    device_repo = FakeDeviceRepository(create_returns=None)
-    service, session, _, _ = build_service(device_repo=device_repo)
-
-    assert await service.create_device("pi-new", location_id=5) is None
+    # The MQTT hub owns the transaction for the whole message.
     assert session.commits == 0
 
 
@@ -100,7 +86,7 @@ async def test_get_or_create_registers_an_unknown_device_as_pending():
     assert device.hardware_id == "pi-unseen"
     assert device.status == DeviceStatus.PENDING
     assert device_repo.created == [("pi-unseen", 1)]
-    assert session.commits == 1
+    assert session.commits == 0
 
 
 async def test_get_or_create_creates_the_unknown_location_once():
@@ -109,11 +95,11 @@ async def test_get_or_create_creates_the_unknown_location_once():
     await service.get_or_create_device("pi-a")
     await service.get_or_create_device("pi-b")
 
-    assert location_repo.created == ["Unknown"]
+    assert location_repo.created == [DEFAULT_LOCATION_NAME]
 
 
-async def test_get_or_create_reuses_an_existing_unknown_location():
-    unknown = make_location(9, "Unknown")
+async def test_get_or_create_reuses_an_existing_default_location():
+    unknown = make_location(9, DEFAULT_LOCATION_NAME)
     service, _, device_repo, location_repo = build_service(locations=[unknown])
 
     await service.get_or_create_device("pi-a")
@@ -122,13 +108,13 @@ async def test_get_or_create_reuses_an_existing_unknown_location():
     assert device_repo.created == [("pi-a", 9)]
 
 
-async def test_get_or_create_still_resolves_the_location_for_a_known_device():
-    """The location lookup runs before the device check, so it is created either way."""
+async def test_get_or_create_does_no_location_work_for_a_known_device():
+    """Only registration needs a location; the steady-state path is one lookup."""
     service, _, _, location_repo = build_service([make_device(1, "pi-01")])
 
     await service.get_or_create_device("pi-01")
 
-    assert location_repo.created == ["Unknown"]
+    assert location_repo.created == []
 
 
 # --------------------------------------------------------------------------- #
@@ -167,17 +153,18 @@ async def test_update_device_passes_through_other_fields():
     service, _, device_repo, _ = build_service([device], locations=[make_location(1, "Attic")])
 
     updated = await service.update_device(
-        1, DeviceUpdate(location_name="Attic", display_name="New Name", status="active")
+        1,
+        DeviceUpdate(location_name="Attic", display_name="New Name", status=DeviceStatus.ACTIVE),
     )
 
     assert device_repo.updates[0][1] == {
         "display_name": "New Name",
-        "status": "active",
+        "status": DeviceStatus.ACTIVE,
         "location_id": 1,
     }
     assert updated is not None
     assert updated.display_name == "New Name"
-    assert updated.status == "active"
+    assert updated.status == DeviceStatus.ACTIVE
 
 
 async def test_update_device_omits_fields_the_caller_never_set():
@@ -191,33 +178,48 @@ async def test_update_device_omits_fields_the_caller_never_set():
     assert device.display_name == "Keep Me"
 
 
-async def test_update_device_refreshes_the_committed_row():
-    device = make_device(1)
-    service, session, _, _ = build_service([device], locations=[make_location(1, "Attic")])
+async def test_update_device_rereads_the_committed_row():
+    """Re-read rather than session.refresh(): refresh reloads columns only and
+    would drop the eagerly loaded location the response serialises."""
+    attic = make_location(1, "Attic")
+    device = make_device(1, location=attic)
+    service, session, device_repo, _ = build_service([device], locations=[attic])
 
-    await service.update_device(1, DeviceUpdate(location_name="Attic"))
+    updated = await service.update_device(1, DeviceUpdate(location_name="Attic"))
 
-    assert session.refreshed == [device]
+    assert session.commits == 1
+    assert session.refreshed == []
+    assert device_repo.get_by_id_calls[-1] == 1
+    assert updated is not None
+    assert updated.location is not None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "update_device refreshes unconditionally, so a PATCH against an unknown "
-        "device blows up inside session.refresh(None) instead of returning None "
-        "for the router to turn into a 404."
-    ),
-)
 async def test_update_device_returns_none_for_an_unknown_device():
     service, session, _, _ = build_service([make_device(1)])
 
     assert await service.update_device(99, DeviceUpdate(location_name="Attic")) is None
+    assert session.commits == 0
     assert session.refreshed == []
+
+
+async def test_update_device_can_change_status_without_restating_the_location():
+    device = make_device(1, status=DeviceStatus.PENDING)
+    service, _, device_repo, location_repo = build_service([device])
+
+    updated = await service.update_device(1, DeviceUpdate(status=DeviceStatus.ACTIVE))
+
+    assert device_repo.updates == [(1, {"status": DeviceStatus.ACTIVE})]
+    assert location_repo.created == []
+    assert updated is not None
+    assert updated.status == DeviceStatus.ACTIVE
 
 
 # --------------------------------------------------------------------------- #
 # mark_online
 # --------------------------------------------------------------------------- #
+
+STALE = LIVENESS_REFRESH + timedelta(seconds=1)
+RECENT = LIVENESS_REFRESH - timedelta(seconds=1)
 
 
 async def test_mark_online_is_a_noop_for_an_unknown_device():
@@ -229,46 +231,50 @@ async def test_mark_online_is_a_noop_for_an_unknown_device():
 
 
 async def test_mark_online_writes_when_the_device_has_never_been_seen():
-    device = make_device(1, last_seen=None, is_online=False)
-    service, session, _, _ = build_service([device])
+    device = make_device(1, last_seen=None)
+    service, _, _, _ = build_service([device])
 
     await service.mark_online(1)
 
-    assert device.is_online is True
     assert device.last_seen is not None
-    assert session.commits == 1
 
 
 async def test_mark_online_writes_once_the_throttle_window_has_elapsed():
-    stale = datetime.now(timezone.utc) - timedelta(seconds=301)
-    device = make_device(1, last_seen=stale, is_online=False)
-    service, session, _, _ = build_service([device])
+    stale = datetime.now(UTC) - STALE
+    device = make_device(1, last_seen=stale)
+    service, _, _, _ = build_service([device])
 
     await service.mark_online(1)
 
-    assert device.is_online is True
     assert device.last_seen > stale
-    assert session.commits == 1
 
 
 async def test_mark_online_is_throttled_inside_the_window():
-    """Telemetry arrives far more often than every 300s; only the first write commits."""
-    recent = datetime.now(timezone.utc) - timedelta(seconds=299)
-    device = make_device(1, last_seen=recent, is_online=False)
-    service, session, _, _ = build_service([device])
+    """Telemetry arrives far more often than the online window needs; only the
+    first message past the refresh interval dirties the row."""
+    recent = datetime.now(UTC) - RECENT
+    device = make_device(1, last_seen=recent)
+    service, _, _, _ = build_service([device])
 
     await service.mark_online(1)
 
     assert device.last_seen == recent
-    assert device.is_online is False
-    assert session.commits == 0
 
 
-async def test_repeated_mark_online_calls_commit_only_once():
+async def test_repeated_mark_online_calls_write_only_once():
     device = make_device(1, last_seen=None)
-    service, session, _, _ = build_service([device])
+    service, _, _, _ = build_service([device])
 
-    for _ in range(5):
+    await service.mark_online(1)
+    first_write = device.last_seen
+    for _ in range(4):
         await service.mark_online(1)
 
-    assert session.commits == 1
+    assert device.last_seen == first_write
+
+
+async def test_the_refresh_interval_stays_inside_the_online_window():
+    """A device refreshing on schedule must never read as offline."""
+    from app.domain.intervals import ONLINE_WINDOW
+
+    assert LIVENESS_REFRESH < ONLINE_WINDOW

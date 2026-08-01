@@ -57,7 +57,10 @@ class PowerManager:
         return (
             self.armed
             or (self.cue_until is not None and now < self.cue_until)
-            or any(now - lease.last_write < self._settings.lease_ttl_s for lease in self._leases.values())
+            or any(
+                now - lease.last_write < self._settings.lease_ttl_s
+                for lease in self._leases.values()
+            )
         )
 
     def _reap_stale(self, now: float) -> None:
@@ -72,7 +75,13 @@ class PowerManager:
 
     async def run(self) -> None:
         while True:
-            self.tick(time.monotonic())
+            # A raise here would end power management for the life of the
+            # process, leaving the sensor stuck in whatever state it was last
+            # told. Log and keep ticking instead.
+            try:
+                self.tick(time.monotonic())
+            except Exception:
+                logger.exception("power tick failed")
             await asyncio.sleep(TICK_S)
 
     def tick(self, now: float) -> None:
@@ -86,7 +95,10 @@ class PowerManager:
             # lease dies so an F5 doesn't power-cycle it.
             if self._grace_deadline is None:
                 self._grace_deadline = now + self._settings.power_off_grace_s
-                logger.info("no power source; releasing sensor in %.0fs", self._settings.power_off_grace_s)
+                logger.info(
+                    "no power source; releasing sensor in %.0fs",
+                    self._settings.power_off_grace_s,
+                )
             elif now >= self._grace_deadline:
                 self._grace_deadline = None
                 self._powered = False

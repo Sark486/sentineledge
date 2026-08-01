@@ -1,17 +1,13 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
-import pytest
-
-from app.domain.events import DeviceEvents
+from app.domain.devices import DEFAULT_LOCATION_NAME
 from app.domain.intervals import ONLINE_WINDOW, Interval
 from app.infrastructure.repositories import DeviceRepository, TelemetryRepository
 from app.services.telemetry_service import TelemetryService
 from tests.fakes import (
     FakeDeviceRepository,
-    FakeSession,
     FakeTelemetryRepository,
-    as_session,
     make_climate_data,
     make_device,
     make_location,
@@ -19,19 +15,17 @@ from tests.fakes import (
     stands_in_for,
 )
 
-TS = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
+TS = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
 
 
 def build_service(devices=(), telemetry_repo=None):
-    session = FakeSession()
     telemetry_repo = telemetry_repo or FakeTelemetryRepository()
     device_repo = FakeDeviceRepository(devices)
-    return make_service(session, telemetry_repo, device_repo), telemetry_repo, device_repo
+    return make_service(telemetry_repo, device_repo), telemetry_repo, device_repo
 
 
-def make_service(session, telemetry_repo, device_repo) -> TelemetryService:
+def make_service(telemetry_repo, device_repo) -> TelemetryService:
     return TelemetryService(
-        as_session(session),
         stands_in_for(TelemetryRepository, telemetry_repo),
         stands_in_for(DeviceRepository, device_repo),
     )
@@ -63,20 +57,22 @@ async def test_save_telemetry_drops_readings_for_an_unknown_device():
     assert telemetry_repo.added == []
 
 
-async def test_save_telemetry_falls_back_to_unassigned_when_the_device_has_no_location():
+async def test_save_telemetry_falls_back_to_the_default_location_name():
     service, telemetry_repo, _ = build_service([make_device(1, location=None)])
 
     await service.save_telemetry(1, make_climate_data())
 
-    assert telemetry_repo.added[0]["location_name"] == "Unassigned"
+    assert telemetry_repo.added[0]["location_name"] == DEFAULT_LOCATION_NAME
 
 
-async def test_save_telemetry_defaults_the_timestamp_to_the_payloads_own():
+async def test_save_telemetry_leaves_the_timestamp_to_the_repository():
+    """The payload's own timestamp is the repository's default, applied in one
+    place rather than defaulted again on the way in."""
     service, telemetry_repo, _ = build_service([make_device(1)])
 
     await service.save_telemetry(1, make_climate_data(timestamp=TS))
 
-    assert telemetry_repo.added[0]["ts"] == TS
+    assert telemetry_repo.added[0]["ts"] is None
 
 
 async def test_save_telemetry_prefers_an_explicit_timestamp():
@@ -89,99 +85,45 @@ async def test_save_telemetry_prefers_an_explicit_timestamp():
 
 
 # --------------------------------------------------------------------------- #
-# Location cache
+# location_snapshot
 # --------------------------------------------------------------------------- #
 
 
-async def test_location_name_is_cached_after_the_first_lookup():
-    device = make_device(1, location=make_location(1, "Kitchen"))
-    service, _, device_repo = build_service([device])
-
-    await service.save_telemetry(1, make_climate_data())
-    first_round = len(device_repo.get_by_id_calls)
-    await service.save_telemetry(1, make_climate_data())
-
-    # save_telemetry always re-checks the device exists; only the *location*
-    # lookup is cached, so the second call must be one query cheaper.
-    assert len(device_repo.get_by_id_calls) == first_round + 1
-
-
-async def test_cached_location_survives_a_device_moving_until_invalidated():
+async def test_the_snapshot_follows_the_device_to_its_new_location():
+    """The snapshot is read from the device on every write, so a move is picked
+    up by the next reading rather than at the next process restart."""
     device = make_device(1, location=make_location(1, "Kitchen"))
     service, telemetry_repo, _ = build_service([device])
 
     await service.save_telemetry(1, make_climate_data())
     device.location = make_location(2, "Garage")
-    await service.save_telemetry(1, make_climate_data())
-
-    assert [r["location_name"] for r in telemetry_repo.added] == ["Kitchen", "Kitchen"]
-
-
-async def test_invalidating_the_cache_picks_up_the_new_location():
-    device = make_device(1, location=make_location(1, "Kitchen"))
-    service, telemetry_repo, _ = build_service([device])
-
-    await service.save_telemetry(1, make_climate_data())
-    device.location = make_location(2, "Garage")
-    TelemetryService.invalidate_location_cache(1)
     await service.save_telemetry(1, make_climate_data())
 
     assert [r["location_name"] for r in telemetry_repo.added] == ["Kitchen", "Garage"]
 
 
-async def test_invalidating_an_uncached_device_is_harmless():
-    TelemetryService.invalidate_location_cache(1234)
-
-    assert TelemetryService._location_cache == {}
-
-
-async def test_invalidation_only_evicts_the_named_device():
-    devices = [
-        make_device(1, "pi-01", location=make_location(1, "Kitchen")),
-        make_device(2, "pi-02", location=make_location(2, "Garage")),
-    ]
-    service, _, _ = build_service(devices)
+async def test_saving_costs_one_device_lookup():
+    device = make_device(1, location=make_location(1, "Kitchen"))
+    service, _, device_repo = build_service([device])
 
     await service.save_telemetry(1, make_climate_data())
-    await service.save_telemetry(2, make_climate_data())
-    TelemetryService.invalidate_location_cache(1)
 
-    assert TelemetryService._location_cache == {2: "Garage"}
+    assert device_repo.get_by_id_calls == [1]
 
 
-async def test_the_cache_is_shared_between_service_instances():
-    """The MQTT hub builds a fresh service per message; the cache is class-level
-    precisely so those instances do not each re-query the location."""
+async def test_service_instances_share_no_state():
+    """The MQTT hub builds a fresh service per message; nothing may carry over."""
     device = make_device(1, location=make_location(1, "Kitchen"))
     device_repo = FakeDeviceRepository([device])
-    first = make_service(FakeSession(), FakeTelemetryRepository(), device_repo)
-    second = make_service(FakeSession(), FakeTelemetryRepository(), device_repo)
+    first = make_service(FakeTelemetryRepository(), device_repo)
+    second_repo = FakeTelemetryRepository()
+    second = make_service(second_repo, device_repo)
 
     await first.save_telemetry(1, make_climate_data())
-    calls_after_first = len(device_repo.get_by_id_calls)
+    device.location = make_location(2, "Garage")
     await second.save_telemetry(1, make_climate_data())
 
-    assert len(device_repo.get_by_id_calls) == calls_after_first + 1
-
-
-def test_constructing_the_service_subscribes_to_device_updates():
-    make_service(FakeSession(), FakeTelemetryRepository(), FakeDeviceRepository())
-
-    assert TelemetryService.invalidate_location_cache in DeviceEvents._on_update_listeners
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Every TelemetryService instance appends another listener, and the MQTT hub "
-        "builds one per message — the listener list grows without bound."
-    ),
-)
-def test_repeated_construction_does_not_stack_duplicate_listeners():
-    for _ in range(5):
-        make_service(FakeSession(), FakeTelemetryRepository(), FakeDeviceRepository())
-
-    assert len(DeviceEvents._on_update_listeners) == 1
+    assert second_repo.added[0]["location_name"] == "Garage"
 
 
 # --------------------------------------------------------------------------- #
@@ -261,9 +203,9 @@ async def test_get_series_defaults_to_the_last_24_hours():
     repo = FakeTelemetryRepository()
     service, _, _ = build_service(telemetry_repo=repo)
 
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
     result = await service.get_series()
-    after = datetime.now(timezone.utc)
+    after = datetime.now(UTC)
 
     assert before <= result.end <= after
     assert result.end - result.start == timedelta(hours=24)
@@ -284,7 +226,7 @@ async def test_get_series_backfills_the_start_from_an_explicit_end():
 async def test_get_series_picks_the_source_from_the_resolved_interval():
     repo = FakeTelemetryRepository()
     service, _, _ = build_service(telemetry_repo=repo)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     result = await service.get_series(start=now - timedelta(hours=1), end=now)
 
@@ -297,7 +239,7 @@ async def test_get_series_picks_the_source_from_the_resolved_interval():
 async def test_get_series_reports_a_retention_downgrade():
     repo = FakeTelemetryRepository()
     service, _, _ = build_service(telemetry_repo=repo)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     result = await service.get_series(
         interval=Interval.ONE_MIN, start=now - timedelta(days=60), end=now

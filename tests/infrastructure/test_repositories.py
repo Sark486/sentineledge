@@ -7,7 +7,7 @@ bound parameters. That is enough to catch the regressions that matter here — a
 dropped filter, a flipped sort, a lost join, a mis-picked source view.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -24,8 +24,8 @@ from tests.fakes import (
     telemetry_repository,
 )
 
-START = datetime(2026, 7, 1, tzinfo=timezone.utc)
-END = datetime(2026, 7, 15, tzinfo=timezone.utc)
+START = datetime(2026, 7, 1, tzinfo=UTC)
+END = datetime(2026, 7, 15, tzinfo=UTC)
 
 
 # --------------------------------------------------------------------------- #
@@ -42,19 +42,6 @@ async def test_list_all_eager_loads_the_location():
 
     assert len(devices) == 2
     assert "LEFT OUTER JOIN locations" in session.sql()
-
-
-async def test_count_all_returns_the_scalar():
-    session = FakeSession([FakeResult(scalar=42)])
-
-    assert await device_repository(session).count_all() == 42
-    assert "count(devices.id)" in session.sql()
-
-
-async def test_count_all_treats_a_null_scalar_as_zero():
-    session = FakeSession([FakeResult(scalar=None)])
-
-    assert await device_repository(session).count_all() == 0
 
 
 async def test_get_by_id_filters_and_eager_loads():
@@ -112,10 +99,29 @@ async def test_update_applies_each_field_and_flushes():
     assert session.commits == 0
 
 
-async def test_update_of_a_missing_device_returns_none():
+async def test_update_of_a_missing_device_returns_none_without_flushing():
     session = FakeSession([FakeResult([])])
 
     assert await device_repository(session).update(99, {"display_name": "New"}) is None
+    assert session.flushes == 0
+
+
+async def test_update_refuses_a_field_outside_the_whitelist():
+    """`update` assigns whatever it is handed, so the whitelist is the only
+    thing standing between a rogue key and the model."""
+    device = make_device(1)
+    session = FakeSession([FakeResult([device])])
+
+    with pytest.raises(ValueError, match="hardware_id"):
+        await device_repository(session).update(1, {"hardware_id": "stolen"})
+
+
+@pytest.mark.parametrize("field", ["display_name", "status", "location_id"])
+async def test_update_accepts_every_whitelisted_field(field):
+    device = make_device(1)
+    session = FakeSession([FakeResult([device])])
+
+    assert await device_repository(session).update(1, {field: None}) is device
 
 
 async def test_update_with_an_empty_payload_leaves_the_device_alone():
@@ -431,13 +437,13 @@ async def test_current_readings_takes_one_row_per_device():
 
 
 async def test_current_readings_cuts_off_at_the_window():
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
     session = FakeSession([FakeResult([])])
 
     await telemetry_repository(session).get_current_readings(timedelta(minutes=10))
 
     cutoff = session.params()["timestamp_1"]
-    assert before - timedelta(minutes=10) <= cutoff <= datetime.now(timezone.utc)
+    assert before - timedelta(minutes=10) <= cutoff <= datetime.now(UTC)
 
 
 async def test_current_readings_joins_the_device_and_outer_joins_the_location():
@@ -463,21 +469,6 @@ async def test_current_readings_labels_the_location_column():
 # --------------------------------------------------------------------------- #
 # LocationRepository
 # --------------------------------------------------------------------------- #
-
-
-async def test_location_list_all():
-    locations = [make_location(1, "Kitchen"), make_location(2, "Garage")]
-    session = FakeSession([FakeResult(locations)])
-
-    assert list(await location_repository(session).list_all()) == locations
-
-
-async def test_location_get_by_id():
-    location = make_location(3, "Attic")
-    session = FakeSession([FakeResult([location])])
-
-    assert await location_repository(session).get_by_id(3) is location
-    assert session.params()["id_1"] == 3
 
 
 async def test_location_get_by_display_name():

@@ -1,4 +1,4 @@
-from app.exceptions.sentinet_not_found_error import SentinelNotFoundError
+from app.domain.exceptions import SentinelNotFoundError
 from app.infrastructure.models import DeviceStatus
 from tests.fakes import make_device, make_location, make_reading
 
@@ -6,7 +6,7 @@ BASE = "/api/v1/devices"
 
 
 # --------------------------------------------------------------------------- #
-# GET /devices/
+# GET /devices
 # --------------------------------------------------------------------------- #
 
 
@@ -15,9 +15,9 @@ async def test_list_devices_returns_a_paginated_envelope(client, device_service)
         make_device(1, "pi-01", "Kitchen Pi", location=make_location(1, "Kitchen")),
         make_device(2, "pi-02", "Garage Pi", location=make_location(2, "Garage")),
     ]
-    device_service.set_return("list_devices", devices).set_return("count_devices", 2)
+    device_service.set_return("list_devices", devices)
 
-    response = await client.get(f"{BASE}/")
+    response = await client.get(BASE)
 
     assert response.status_code == 200
     body = response.json()
@@ -26,39 +26,37 @@ async def test_list_devices_returns_a_paginated_envelope(client, device_service)
     assert [d["hardware_id"] for d in body["data"]] == ["pi-01", "pi-02"]
 
 
-async def test_list_devices_reports_the_full_list_as_the_limit(client, device_service):
-    """This route is unpaginated, so limit mirrors the total rather than lying about a page size."""
-    device_service.set_return("list_devices", [make_device(1)]).set_return("count_devices", 1)
+async def test_list_devices_derives_the_envelope_from_one_query(client, device_service):
+    """Unpaginated: count and limit both come from the list itself, so they can
+    never disagree the way two separate queries could."""
+    device_service.set_return("list_devices", [make_device(1)])
 
-    body = (await client.get(f"{BASE}/")).json()
+    body = (await client.get(BASE)).json()
 
     assert body["limit"] == body["count"] == 1
+    assert not device_service.called("count_devices")
 
 
 async def test_list_devices_serialises_the_nested_location(client, device_service):
-    device_service.set_return(
-        "list_devices", [make_device(1, location=make_location(3, "Attic"))]
-    ).set_return("count_devices", 1)
+    device_service.set_return("list_devices", [make_device(1, location=make_location(3, "Attic"))])
 
-    body = (await client.get(f"{BASE}/")).json()
+    body = (await client.get(BASE)).json()
 
     assert body["data"][0]["location"] == {"display_name": "Attic"}
 
 
 async def test_list_devices_tolerates_a_device_with_no_location(client, device_service):
-    device_service.set_return("list_devices", [make_device(1, location=None)]).set_return(
-        "count_devices", 1
-    )
+    device_service.set_return("list_devices", [make_device(1, location=None)])
 
-    body = (await client.get(f"{BASE}/")).json()
+    body = (await client.get(BASE)).json()
 
     assert body["data"][0]["location"] is None
 
 
 async def test_list_devices_with_no_devices(client, device_service):
-    device_service.set_return("list_devices", []).set_return("count_devices", 0)
+    device_service.set_return("list_devices", [])
 
-    body = (await client.get(f"{BASE}/")).json()
+    body = (await client.get(BASE)).json()
 
     assert body == {"count": 0, "limit": 0, "offset": 0, "data": []}
 
@@ -85,7 +83,7 @@ async def test_get_device_404s_when_missing(client, device_service):
     response = await client.get(f"{BASE}/999")
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "Resource not found"}
+    assert response.json() == {"detail": "Device 999 not found"}
 
 
 async def test_get_device_rejects_a_non_numeric_id(client, device_service):
@@ -133,7 +131,7 @@ async def test_patch_device_activates_a_pending_device(client, device_service):
 
     assert response.status_code == 200
     assert response.json()["status"] == "active"
-    assert device_service.args_of("update_device")[1].status == "active"
+    assert device_service.args_of("update_device")[1].status is DeviceStatus.ACTIVE
 
 
 async def test_patch_device_leaves_unsent_fields_unset(client, device_service):
@@ -145,8 +143,20 @@ async def test_patch_device_leaves_unsent_fields_unset(client, device_service):
     assert schema.model_dump(exclude_unset=True) == {"location_name": "Attic"}
 
 
-async def test_patch_device_requires_a_location_name(client, device_service):
+async def test_patch_device_does_not_require_a_location_name(client, device_service):
+    """A rename must not force the caller to restate where the device lives."""
+    device_service.set_return("update_device", make_device(1, display_name="Renamed"))
+
     response = await client.patch(f"{BASE}/1", json={"display_name": "Renamed"})
+
+    assert response.status_code == 200
+    schema = device_service.args_of("update_device")[1]
+    assert schema.model_dump(exclude_unset=True) == {"display_name": "Renamed"}
+
+
+async def test_patch_device_rejects_an_unknown_status(client, device_service):
+    """An unvalidated status used to reach the enum column and 500 there."""
+    response = await client.patch(f"{BASE}/1", json={"status": "garbage"})
 
     assert response.status_code == 422
     assert not device_service.called("update_device")
@@ -173,7 +183,8 @@ async def test_patch_device_404s_when_the_service_raises_not_found(client, devic
 # --------------------------------------------------------------------------- #
 
 
-async def test_latest_for_a_device_returns_the_readings(client, telemetry_service):
+async def test_latest_for_a_device_returns_the_readings(client, device_service, telemetry_service):
+    device_service.set_return("get_device_by_id", make_device(3))
     telemetry_service.set_return(
         "get_latest_telemetry_by_device", [make_reading(device_id=3, temperature=20.5)]
     )
@@ -184,9 +195,23 @@ async def test_latest_for_a_device_returns_the_readings(client, telemetry_servic
     assert response.json()[0]["temperature"] == 20.5
 
 
-async def test_latest_for_a_device_404s_when_there_are_no_readings(client, telemetry_service):
+async def test_latest_is_empty_for_a_device_that_has_never_reported(
+    client, device_service, telemetry_service
+):
+    """A known but silent device is not the same as an unknown one."""
+    device_service.set_return("get_device_by_id", make_device(3))
     telemetry_service.set_return("get_latest_telemetry_by_device", [])
 
     response = await client.get(f"{BASE}/3/latest")
 
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+async def test_latest_404s_for_an_unknown_device(client, device_service, telemetry_service):
+    device_service.set_return("get_device_by_id", None)
+
+    response = await client.get(f"{BASE}/999/latest")
+
     assert response.status_code == 404
+    assert not telemetry_service.called("get_latest_telemetry_by_device")

@@ -1,7 +1,7 @@
-from fastapi.applications import FastAPI
 import logging
 
 import uvicorn
+from fastapi.applications import FastAPI
 
 from agent.capture import CaptureController, FrameBus
 from agent.config import AgentSettings

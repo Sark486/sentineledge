@@ -82,17 +82,17 @@ def harness(settings, capture):
 
 
 # --------------------------------------------------------------------------- #
-# /healthz
+# /health
 # --------------------------------------------------------------------------- #
 
 
-async def test_healthz_reports_the_agent_state(harness, capture):
+async def test_health_reports_the_agent_state(harness, capture):
     client, _, power = harness()
     capture.sensor_on = True
     power.create_lease("viewer-1")
 
     async with client:
-        body = (await client.get("/healthz")).json()
+        body = (await client.get("/health")).json()
 
     assert body == {
         "status": "ok",
@@ -102,11 +102,11 @@ async def test_healthz_reports_the_agent_state(harness, capture):
     }
 
 
-async def test_healthz_reports_an_idle_agent(harness):
+async def test_health_reports_an_idle_agent(harness):
     client, _, _ = harness()
 
     async with client:
-        body = (await client.get("/healthz")).json()
+        body = (await client.get("/health")).json()
 
     assert body["sensor_on"] is False
     assert body["viewers"] == 0
@@ -198,13 +198,12 @@ async def test_each_snapshot_uses_a_distinct_viewer_id(harness):
 async def test_stream_advertises_the_multipart_content_type(harness):
     client, _, _ = harness(payloads=[b"a"])
 
-    async with client:
-        async with client.stream("GET", f"/cameras/{HARDWARE_ID}/stream") as response:
-            assert response.status_code == 200
-            assert response.headers["content-type"] == (
-                f"multipart/x-mixed-replace; boundary={BOUNDARY}"
-            )
-            await response.aclose()
+    async with client, client.stream("GET", f"/cameras/{HARDWARE_ID}/stream") as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"] == (
+            f"multipart/x-mixed-replace; boundary={BOUNDARY}"
+        )
+        await response.aclose()
 
 
 async def test_stream_frames_carry_a_boundary_and_content_length(harness):

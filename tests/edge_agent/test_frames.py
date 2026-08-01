@@ -88,4 +88,4 @@ def test_frame_is_slotted_and_rejects_stray_attributes():
     frame = make_frame(1)
 
     with pytest.raises(AttributeError):
-        setattr(frame, "something_else", 1)
+        frame.something_else = 1  # type: ignore

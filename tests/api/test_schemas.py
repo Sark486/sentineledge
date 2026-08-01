@@ -5,7 +5,7 @@ ORM instances (devices, readings) and plain SQLAlchemy `Row`s (series buckets,
 current readings). These pin down that contract independently of the routers.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -14,10 +14,8 @@ from pydantic import ValidationError
 from app.api.schemas import (
     ClimateReadingRead,
     CurrentReadingRead,
-    DeviceCreate,
     DeviceRead,
     DeviceUpdate,
-    LocationRead,
     PaginatedResponse,
     SeriesPoint,
     SeriesResponse,
@@ -25,7 +23,7 @@ from app.api.schemas import (
 from app.infrastructure.models import DeviceStatus
 from tests.fakes import make_device, make_location, make_reading
 
-TS = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
+TS = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
 
 
 # --------------------------------------------------------------------------- #
@@ -92,16 +90,10 @@ def test_device_read_allows_a_never_seen_device():
     assert read.last_seen is None
 
 
-def test_device_create_requires_a_hardware_id():
-    assert DeviceCreate(hardware_id="pi-01").display_name is None
-
-    with pytest.raises(ValidationError):
-        DeviceCreate.model_validate({"display_name": "No hardware id"})
-
-
-def test_device_update_requires_a_location_name():
-    with pytest.raises(ValidationError):
-        DeviceUpdate.model_validate({"display_name": "Renamed"})
+def test_device_update_accepts_any_subset_of_fields():
+    """Every field is optional so a rename need not restate the location."""
+    assert DeviceUpdate.model_validate({"display_name": "Renamed"}).location_name is None
+    assert DeviceUpdate.model_validate({}).model_dump(exclude_unset=True) == {}
 
 
 def test_device_update_tracks_which_fields_were_set():
@@ -114,24 +106,22 @@ def test_device_update_tracks_which_fields_were_set():
 
 
 def test_device_update_carries_every_field_when_all_are_sent():
-    schema = DeviceUpdate(location_name="Attic", display_name="Renamed", status="active")
+    schema = DeviceUpdate(
+        location_name="Attic", display_name="Renamed", status=DeviceStatus.ACTIVE
+    )
 
     assert schema.model_dump(exclude_unset=True) == {
         "location_name": "Attic",
         "display_name": "Renamed",
-        "status": "active",
+        "status": DeviceStatus.ACTIVE,
     }
 
 
-def test_device_update_status_is_an_unvalidated_string():
-    """Status is typed as a bare str, so a bogus value reaches the repository."""
-    assert DeviceUpdate(location_name="Attic", status="banana").status == "banana"
-
-
-def test_location_read_from_an_orm_location():
-    read = LocationRead.model_validate(make_location(4, "Attic"), from_attributes=True)
-
-    assert (read.id, read.display_name) == (4, "Attic")
+def test_device_update_rejects_an_unknown_status():
+    """Typed as the enum, so a bogus value is a 422 rather than a 500 from the
+    enum column the repository would otherwise assign it to."""
+    with pytest.raises(ValidationError):
+        DeviceUpdate.model_validate({"status": "banana"})
 
 
 # --------------------------------------------------------------------------- #

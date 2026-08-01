@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -7,16 +7,16 @@ from app.domain.sensors import EnvironmentalData
 
 
 def test_timestamp_defaults_to_an_aware_utc_now():
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
     data = EnvironmentalData(temperature=21.0, humidity=40.0, pressure=1000.0, source="pi-01")
-    after = datetime.now(timezone.utc)
+    after = datetime.now(UTC)
 
     assert data.timestamp.tzinfo is not None
     assert before <= data.timestamp <= after
 
 
 def test_explicit_timestamp_is_preserved():
-    ts = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
+    ts = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
     data = EnvironmentalData(
         temperature=21.0, humidity=40.0, pressure=1000.0, source="pi-01", timestamp=ts
     )
@@ -35,7 +35,7 @@ def test_iso_timestamp_string_is_parsed():
         }
     )
 
-    assert data.timestamp == datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
+    assert data.timestamp == datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
 
 
 def test_numeric_strings_are_coerced_to_floats():

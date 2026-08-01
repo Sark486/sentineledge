@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import logging
 from collections.abc import AsyncIterator
 from uuid import uuid4
 
@@ -10,6 +11,8 @@ from agent.capture import CaptureController
 from agent.config import AgentSettings
 from agent.power import PowerManager
 from agent.sinks.mjpeg import MJPEGSink, ViewerConnection
+
+logger = logging.getLogger(__name__)
 
 BOUNDARY = "frame"
 
@@ -66,7 +69,9 @@ def build_app(
                 mjpeg.remove_viewer(viewer_id)
                 power.drop_lease(viewer_id)
 
-        return StreamingResponse(gen(), media_type=f"multipart/x-mixed-replace; boundary={BOUNDARY}")
+        return StreamingResponse(
+            gen(), media_type=f"multipart/x-mixed-replace; boundary={BOUNDARY}"
+        )
 
     @app.get("/cameras/{hardware_id}/snapshot")
     async def snapshot(hardware_id: str) -> Response:
@@ -82,11 +87,12 @@ def build_app(
             mjpeg.remove_viewer(viewer_id)
             power.drop_lease(viewer_id)
         if jpeg is None:
+            logger.warning("snapshot timed out waiting for the first frame")
             raise HTTPException(status_code=503, detail="sensor did not deliver a frame")
         return Response(content=jpeg, media_type="image/jpeg")
 
-    @app.get("/healthz")
-    async def healthz() -> dict[str, object]:
+    @app.get("/health")
+    async def health() -> dict[str, object]:
         return {
             "status": "ok",
             "hardware_id": settings.hardware_id,

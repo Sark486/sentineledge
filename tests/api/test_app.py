@@ -2,13 +2,17 @@
 the lifespan that owns the MQTT hub task."""
 
 import asyncio
+from typing import cast
 
 import pytest
+from fastapi import Request
 from httpx import ASGITransport, AsyncClient
 
 from app.core.config import Settings
-from app.exceptions.sentinet_not_found_error import SentinelNotFoundError
+from app.domain.exceptions import SentinelNotFoundError
 from app.main import app, lifespan, sentinel_not_found_handler
+
+_NO_REQUEST = cast(Request, None)
 
 
 async def test_health_endpoint(client):
@@ -25,28 +29,35 @@ async def test_unknown_route_is_a_404(client):
 async def test_routers_are_mounted_under_the_versioned_prefix():
     paths = {getattr(route, "path", None) for route in app.routes}
 
-    assert "/api/v1/devices/" in paths
-    assert "/api/v1/telemetry/" in paths
+    assert "/api/v1/devices" in paths
+    assert "/api/v1/telemetry" in paths
     assert "/api/v1/telemetry/series" in paths
     assert "/api/v1/telemetry/latest" in paths
 
 
 async def test_the_versioned_prefix_comes_from_settings():
-    assert Settings(
-        database_url="x", redis_url="y", mqtt_host="z"
-    ).API_V1_STR == "/api/v1"
+    assert Settings(database_url="x", mqtt_host="z").api_v1_str == "/api/v1"
 
 
 async def test_not_found_handler_maps_the_domain_error_to_a_404():
-    response = await sentinel_not_found_handler(None, SentinelNotFoundError())
+    response = await sentinel_not_found_handler(_NO_REQUEST, SentinelNotFoundError())
 
     assert response.status_code == 404
 
 
-async def test_not_found_handler_does_not_leak_the_exception_message():
-    response = await sentinel_not_found_handler(None, SentinelNotFoundError("device 42 in shard 7"))
+async def test_not_found_handler_surfaces_the_exception_message():
+    """Every 404 used to read "Resource not found"; the message says which
+    resource, which is the only thing that makes the response actionable."""
+    response = await sentinel_not_found_handler(
+        _NO_REQUEST, SentinelNotFoundError("Device 42 not found")
+    )
 
-    assert b"shard" not in response.body
+    assert b"Device 42 not found" in response.body
+
+
+async def test_not_found_handler_falls_back_when_no_message_was_given():
+    response = await sentinel_not_found_handler(_NO_REQUEST, SentinelNotFoundError())
+
     assert b"Resource not found" in response.body
 
 
@@ -117,7 +128,10 @@ def test_openapi_schema_builds():
 
 @pytest.mark.parametrize(
     "field, value",
-    [("database_url", "postgresql+asyncpg://u:p@h/db"), ("redis_url", "redis://h:6379/0")],
+    [
+        ("database_url", "postgresql+asyncpg://u:p@h/db"),
+        ("mqtt_host", "broker.local"),
+    ],
 )
 def test_settings_read_their_required_fields(field, value):
     settings = Settings(**{field: value, **_other_fields(field)})
@@ -127,13 +141,20 @@ def test_settings_read_their_required_fields(field, value):
 
 def test_settings_ignore_unknown_keys():
     settings = Settings.model_validate(
-        {"database_url": "x", "redis_url": "y", "mqtt_host": "z", "something_unrelated": "!"}
+        {"database_url": "x", "mqtt_host": "z", "something_unrelated": "!"}
     )
 
     assert not hasattr(settings, "something_unrelated")
 
 
+def test_cors_origins_are_configurable():
+    """They used to be a literal in main.py, unreachable from any environment."""
+    settings = Settings(database_url="x", mqtt_host="z", cors_origins=["https://sentinel.local"])
+
+    assert settings.cors_origins == ["https://sentinel.local"]
+
+
 def _other_fields(exclude: str) -> dict:
-    defaults = {"database_url": "x", "redis_url": "y", "mqtt_host": "z"}
+    defaults = {"database_url": "x", "mqtt_host": "z"}
     defaults.pop(exclude)
     return defaults

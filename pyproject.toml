@@ -1,7 +1,7 @@
 [project]
 name = "sentineledge"
 version = "0.1.0"
-description = "Add your description here"
+description = "Home environment monitoring: MQTT telemetry ingestion into TimescaleDB behind a FastAPI API"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -9,9 +9,7 @@ dependencies = [
     "alembic>=1.18.4",
     "asyncpg>=0.31.0",
     "fastapi[standard]",
-    "opencv-contrib-python>=4.13.0.92",
     "pydantic-settings>=2.14.0",
-    "redis>=7.4.0",
     "sqlalchemy>=2.0.49",
     "uvicorn>=0.46.0",
 ]
@@ -25,9 +23,16 @@ dev = [
     "ruff>=0.15.12",
 ]
 
-[[tool.mypy.overrides]]
-module = "sense_hat.*"
-ignore_missing_imports = true
+[tool.ruff]
+line-length = 100
+# Revision files are Alembic-generated scaffolding; reformatting them would only
+# churn history. `migrations/env.py` is hand-written and stays linted.
+extend-exclude = ["migrations/versions"]
+
+[tool.ruff.lint]
+# pycodestyle, pyflakes, isort, pyupgrade, bugbear, flake8-simplify. `UP` is what
+# keeps the modern spellings (X | None, list[T], StrEnum) from drifting back.
+select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

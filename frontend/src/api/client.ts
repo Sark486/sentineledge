@@ -44,7 +44,7 @@ function toQuery(params: Record<string, string | number | undefined>): string {
 }
 
 export const api = {
-  getDevices: () => request<PaginatedResponse<DeviceRead>>("/devices/"),
+  getDevices: () => request<PaginatedResponse<DeviceRead>>("/devices"),
   getDevice: (id: number) => request<DeviceRead>(`/devices/${id}`),
   updateDevice: (id: number, payload: DeviceUpdateInput) =>
     request<DeviceRead>(`/devices/${id}`, {

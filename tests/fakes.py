@@ -15,8 +15,9 @@ stand-ins, so `stands_in_for` narrows them to the declared type at the one point
 where they cross into production code that is annotated for the real thing.
 """
 
-from datetime import datetime, timezone
-from typing import Any, Sequence, TypeVar, cast
+from collections.abc import Sequence
+from datetime import UTC, datetime
+from typing import Any, cast
 
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,10 +33,7 @@ from app.infrastructure.repositories import (
 # Typed as Any so it can stand in as a default for any annotated parameter.
 _UNSET: Any = object()
 
-T = TypeVar("T")
-
-
-def stands_in_for(_declared: type[T], double: object) -> T:
+def stands_in_for[T](_declared: type[T], double: object) -> T:
     """Narrow a test double to the type the production signature declares.
 
     `stands_in_for(AsyncSession, FakeSession())` reads as the assertion it is:
@@ -197,7 +195,6 @@ def make_device(
     status: DeviceStatus = DeviceStatus.ACTIVE,
     location: Location | None = _UNSET,  # type: ignore[assignment]
     last_seen: datetime | None = None,
-    is_online: bool = False,
 ) -> Device:
     if location is _UNSET:
         location = make_location()
@@ -206,12 +203,8 @@ def make_device(
         hardware_id=hardware_id,
         display_name=display_name,
         status=status,
-        is_online=is_online,
         last_seen=last_seen,
     )
-    # Device.location is mapped as non-optional even though location_id is
-    # nullable. Leaving the relationship unset on a transient instance already
-    # reads back as None, so an unlocated device just skips the assignment.
     if location is not None:
         device.location = location
     device.location_id = location.id if location else None
@@ -233,7 +226,7 @@ def make_reading(
         humidity=humidity,
         pressure=pressure,
         location_snapshot=location_snapshot,
-        timestamp=timestamp or datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc),
+        timestamp=timestamp or datetime(2026, 7, 15, 12, 0, tzinfo=UTC),
     )
 
 
@@ -249,7 +242,7 @@ def make_climate_data(
         humidity=humidity,
         pressure=pressure,
         source=source,
-        timestamp=timestamp or datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc),
+        timestamp=timestamp or datetime(2026, 7, 15, 12, 0, tzinfo=UTC),
     )
 
 
@@ -269,9 +262,6 @@ class FakeDeviceRepository:
 
     async def list_all(self) -> Sequence[Device]:
         return list(self.devices)
-
-    async def count_all(self) -> int:
-        return len(self.devices)
 
     async def get_by_id(self, device_id: int) -> Device | None:
         self.get_by_id_calls.append(device_id)
@@ -309,12 +299,6 @@ class FakeLocationRepository:
         self.locations: list[Location] = list(locations)
         self.created: list[str] = []
         self._next_id = max((loc.id for loc in self.locations), default=0) + 1
-
-    async def list_all(self) -> Sequence[Location]:
-        return list(self.locations)
-
-    async def get_by_id(self, location_id: int) -> Location | None:
-        return next((loc for loc in self.locations if loc.id == location_id), None)
 
     async def get_by_display_name(self, display_name: str) -> Location | None:
         return next((loc for loc in self.locations if loc.display_name == display_name), None)

@@ -65,7 +65,6 @@ class Harness:
 
         def make_telemetry(session):
             self.telemetry_service = TelemetryService(
-                session,
                 stands_in_for(TelemetryRepository, self.telemetry_repo),
                 stands_in_for(DeviceRepository, self.device_repo),
             )
@@ -112,13 +111,12 @@ async def test_reading_from_an_active_device_is_persisted(harness):
 
 
 async def test_an_active_device_is_marked_online(harness):
-    device = make_device(1, "pi-01", status=DeviceStatus.ACTIVE, last_seen=None, is_online=False)
+    device = make_device(1, "pi-01", status=DeviceStatus.ACTIVE, last_seen=None)
     harness([device])
     hub = MQTTHub()
 
     await hub._handle_message(message("sentinel/devices/pi-01/telemetry", VALID_PAYLOAD))
 
-    assert device.is_online is True
     assert device.last_seen is not None
 
 
@@ -179,14 +177,14 @@ async def test_a_newly_registered_devices_first_reading_is_dropped(harness):
 
 @pytest.mark.parametrize("status", [DeviceStatus.PENDING, DeviceStatus.BLOCKED])
 async def test_readings_from_non_active_devices_are_dropped(harness, status):
-    device = make_device(1, "pi-01", status=status, last_seen=None, is_online=False)
+    device = make_device(1, "pi-01", status=status, last_seen=None)
     h = harness([device])
     hub = MQTTHub()
 
     await hub._handle_message(message("sentinel/devices/pi-01/telemetry", VALID_PAYLOAD))
 
     assert h.telemetry_repo.added == []
-    assert device.is_online is False
+    assert device.last_seen is None
 
 
 async def test_a_blocked_device_is_not_re_registered(harness):
@@ -237,44 +235,33 @@ async def test_payloads_that_fail_validation_never_reach_the_database(harness, p
     assert h.telemetry_repo.added == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Valid JSON that is not an object reaches payload.pop('source', None) and "
-        "raises TypeError. Nothing in _handle_message or start() catches it — the "
-        "try/except in start() only covers MqttError — so any device publishing "
-        "e.g. '[1,2,3]' kills the ingestion task until the process restarts."
-    ),
-)
 @pytest.mark.parametrize(
     "payload", [b"[1, 2, 3]", b"42", b'"a string"', b"null"], ids=["array", "int", "str", "null"]
 )
 async def test_a_json_payload_that_is_not_an_object_is_dropped(harness, payload):
+    """Valid JSON that is not an object must not reach payload.pop(): the raise
+    would escape start()'s MqttError-only handler and end ingestion outright."""
     h = harness()
     hub = MQTTHub()
 
     await hub._handle_message(message("sentinel/devices/pi-01/telemetry", payload))
 
+    assert h.session_maker.calls == 0
     assert h.telemetry_repo.added == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "_handle_message indexes topic_parts[2] with no length check, so a short "
-        "topic raises IndexError out of the subscribe loop. Not reachable through "
-        "the 'sentinel/devices/+/telemetry' subscription today, but the handler "
-        "should not depend on the broker for that guarantee."
-    ),
-)
 async def test_a_short_topic_does_not_take_down_the_listener(harness):
-    harness()
+    """Not reachable through the subscription filter today, but the handler must
+    not depend on the broker for that guarantee."""
+    h = harness()
     hub = MQTTHub()
 
     await hub._handle_message(message("sentinel/devices", VALID_PAYLOAD))
 
+    assert h.session_maker.calls == 0
 
-async def test_a_database_failure_is_swallowed(harness, monkeypatch):
+
+async def test_a_database_failure_is_rolled_back_and_swallowed(harness, monkeypatch):
     h = harness([make_device(1, "pi-01", status=DeviceStatus.ACTIVE)])
 
     async def boom(*args, **kwargs):
@@ -285,7 +272,49 @@ async def test_a_database_failure_is_swallowed(harness, monkeypatch):
 
     await hub._handle_message(message("sentinel/devices/pi-01/telemetry", VALID_PAYLOAD))
 
+    assert h.session.rollbacks == 1
+    assert h.session.commits == 0
     assert h.session.closed is True
+
+
+async def test_a_poison_message_does_not_end_the_listen_loop(monkeypatch):
+    """The whole point of the guards: one bad message must not stop ingestion."""
+    handled: list[str] = []
+
+    class StubClient:
+        def __init__(self, host, **kwargs):
+            self.messages = self._iter()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def subscribe(self, topic):
+            pass
+
+        async def _iter(self):
+            yield message("sentinel/devices/pi-01/telemetry", b"[1, 2, 3]")
+            yield message("sentinel/devices/pi-02/telemetry", VALID_PAYLOAD)
+            raise StopHub()
+
+    class StopHub(Exception):
+        pass
+
+    async def explode_then_record(msg):
+        if "pi-01" in str(msg.topic):
+            raise RuntimeError("poison")
+        handled.append(str(msg.topic))
+
+    monkeypatch.setattr(aiomqtt, "Client", StubClient)
+    hub = MQTTHub()
+    monkeypatch.setattr(hub, "_handle_message", explode_then_record)
+
+    with pytest.raises(StopHub):
+        await hub.start()
+
+    assert handled == ["sentinel/devices/pi-02/telemetry"]
 
 
 # --------------------------------------------------------------------------- #
