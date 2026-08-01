@@ -134,6 +134,9 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
+# scripts/agent-start.sh pidfile
+scripts/agent.pid
+
 # Environments
 .env
 .envrc

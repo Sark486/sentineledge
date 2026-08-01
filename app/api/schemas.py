@@ -1,83 +1,87 @@
-from typing import Optional, Generic, TypeVar, List
-from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 
-T = TypeVar("T")
+from pydantic import BaseModel, ConfigDict
 
-class PaginatedResponse(BaseModel, Generic[T]):
+from app.infrastructure.models import DeviceStatus
+
+
+class PaginatedResponse[T](BaseModel):
     """Generic paginated response wrapper with metadata."""
+
     count: int
     limit: int
     offset: int
-    data: List[T]
+    data: list[T]
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
+
 
 class LocationBase(BaseModel):
     display_name: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
-class LocationRead(LocationBase):
-    id: int
 
 class DeviceBase(BaseModel):
-    display_name: Optional[str] | None = None
-    location: Optional[LocationBase] = None
-    status: Optional[str] | None = None
+    display_name: str | None = None
 
-class DeviceCreate(DeviceBase):
-    hardware_id: str
 
 class DeviceUpdate(DeviceBase):
-    location_name: str
+    location_name: str | None = None
+    status: DeviceStatus | None = None
+
 
 class DeviceRead(DeviceBase):
     id: int
     hardware_id: str
-    status: str
+    status: DeviceStatus
+    location: LocationBase | None = None
     last_seen: datetime | None
 
     model_config = ConfigDict(from_attributes=True)
 
+
 class ClimateReadingBase(BaseModel):
     timestamp: datetime
-    temperature: Optional[float] = None
-    humidity: Optional[float] = None
-    pressure: Optional[float] = None
+    temperature: float | None = None
+    humidity: float | None = None
+    pressure: float | None = None
     location_snapshot: str
+
 
 class ClimateReadingRead(ClimateReadingBase):
     device_id: int
-    device: Optional[DeviceRead] = None
+    device: DeviceRead | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
 
 class SeriesPoint(BaseModel):
     timestamp: datetime
     device_id: int
-    temperature: Optional[float] = None
-    humidity: Optional[float] = None
-    pressure: Optional[float] = None
+    temperature: float | None = None
+    humidity: float | None = None
+    pressure: float | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
+
 class SeriesResponse(BaseModel):
     interval: str
-    requested_interval: Optional[str] = None
+    requested_interval: str | None = None
     downgraded: bool
     start: datetime
     end: datetime
-    data: List[SeriesPoint]
+    data: list[SeriesPoint]
+
 
 class CurrentReadingRead(BaseModel):
     device_id: int
-    display_name: Optional[str] = None
-    location: Optional[str] = None
+    display_name: str | None = None
+    location: str | None = None
     timestamp: datetime
-    temperature: Optional[float] = None
-    humidity: Optional[float] = None
-    pressure: Optional[float] = None
+    temperature: float | None = None
+    humidity: float | None = None
+    pressure: float | None = None
 
     model_config = ConfigDict(from_attributes=True)

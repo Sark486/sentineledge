@@ -29,7 +29,7 @@ class CaptureController:
     """Owns the sensor via a single long-lived camera thread.
 
     The asyncio side (PowerManager) only flips `set_desired()`; the thread
-    reconciles — opening Picamera2, capturing, and closing all happen off the
+    reconciles - opening Picamera2, capturing, and closing all happen off the
     event loop because `capture_array()` and sensor open/close block.
     """
 
@@ -76,6 +76,7 @@ class CaptureController:
         from picamera2 import Picamera2
 
         picam2 = Picamera2()
+        started = False
         try:
             config = picam2.create_video_configuration(
                 main={"size": MAIN_SIZE, "format": "RGB888"},
@@ -85,6 +86,7 @@ class CaptureController:
             picam2.configure(config)
             opened = time.monotonic()
             picam2.start()
+            started = True
             seq = 0
             while True:
                 with self._cond:
@@ -107,6 +109,9 @@ class CaptureController:
                 seq += 1
         finally:
             self._sensor_on = False
-            picam2.stop()
+            # configure()/start() can raise, and stopping a camera that never
+            # started raises again from inside the finally, masking the original.
+            if started:
+                picam2.stop()
             picam2.close()
             logger.info("sensor released")

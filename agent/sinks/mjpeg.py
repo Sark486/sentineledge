@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import threading
 
 import cv2
@@ -6,6 +7,8 @@ import cv2
 from agent.config import AgentSettings
 from agent.frames import Frame
 from agent.sinks.base import SlotWorkerSink
+
+logger = logging.getLogger(__name__)
 
 
 class ViewerConnection:
@@ -58,6 +61,7 @@ class MJPEGSink(SlotWorkerSink):
         # which is exactly what imencode expects — no cvtColor.
         ok, buf = cv2.imencode(".jpg", frame.main, [cv2.IMWRITE_JPEG_QUALITY, self._quality])
         if not ok:
+            logger.warning("JPEG encode failed for frame %d; dropping", frame.seq)
             return
         # Encode once, fan the same bytes to every viewer.
         jpeg = buf.tobytes()

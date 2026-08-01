@@ -1,12 +1,13 @@
-from app.domain.events import DeviceEvents
-from app.domain.intervals import Interval, ONLINE_WINDOW, resolve_interval
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from app.domain.devices import DEFAULT_LOCATION_NAME
+from app.domain.intervals import ONLINE_WINDOW, Interval, resolve_interval
 from app.domain.sensors import EnvironmentalData
 from app.infrastructure.models import ClimateReading, Device
-from dataclasses import dataclass
-from typing import Any, Sequence, Optional
-from datetime import datetime, timedelta, timezone
-from app.infrastructure.repositories import TelemetryRepository, DeviceRepository
-from sqlalchemy.ext.asyncio import AsyncSession
+from app.infrastructure.repositories import DeviceRepository, TelemetryRepository
 
 
 @dataclass
@@ -20,31 +21,28 @@ class SeriesResult:
 
 
 class TelemetryService:
-    _location_cache: dict[int, str] = {}
 
-    def __init__(self, session: AsyncSession, repo: TelemetryRepository, device_repo: DeviceRepository):
-        self.session: AsyncSession = session
+    def __init__(self, repo: TelemetryRepository, device_repo: DeviceRepository):
         self.repo = repo
         self.device_repo = device_repo
-        DeviceEvents.subscribe_to_update(TelemetryService.invalidate_location_cache)
 
-    @classmethod
-    def invalidate_location_cache(cls, device_id: int):
-        cls._location_cache.pop(device_id, None)
-
-    async def save_telemetry(self, device_id: int, climate_data: EnvironmentalData, ts: datetime | None = None):
+    async def save_telemetry(
+        self, device_id: int, climate_data: EnvironmentalData, ts: datetime | None = None
+    ) -> None:
         device: Device | None = await self.device_repo.get_by_id(device_id)
 
         if not device:
             return
 
-        location_name = await self.__get_location_name(device_id)
+        # Denormalised at write time so a reading keeps the location it was
+        # actually taken in, even after the device moves.
+        location_name = device.location.display_name if device.location else DEFAULT_LOCATION_NAME
 
         await self.repo.add_telemetry(
             device_id=device_id,
             climate_data=climate_data,
             location_name=location_name,
-            ts=ts or climate_data.timestamp
+            ts=ts,
         )
 
     async def get_latest_telemetry_by_device(self, device_id: int) -> Sequence[ClimateReading]:
@@ -52,27 +50,13 @@ class TelemetryService:
 
     async def get_telemetry(
         self,
-        device_id: Optional[int] = None,
-        location: Optional[str] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        device_id: int | None = None,
+        location: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> tuple[int, Sequence[ClimateReading]]:
-        """
-        Query climate readings with optional filters. Returns both total count and paginated results.
-
-        Args:
-            device_id: Filter by device ID
-            location: Filter by location name
-            start_date: Filter readings from this date onwards
-            end_date: Filter readings up to this date
-            limit: Maximum number of results
-            offset: Number of results to skip for pagination
-
-        Returns:
-            Tuple of (total_count, results)
-        """
         count = await self.repo.count_by_filters(
             device_id=device_id,
             location=location,
@@ -93,14 +77,14 @@ class TelemetryService:
 
     async def get_series(
         self,
-        interval: Optional[Interval] = None,
-        device_id: Optional[int] = None,
-        location: Optional[str] = None,
-        start: Optional[datetime] = None,
-        end: Optional[datetime] = None,
+        interval: Interval | None = None,
+        device_id: int | None = None,
+        location: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
     ) -> SeriesResult:
         """Pre-aggregated time-series, sourced from whichever table/view resolve_interval picks."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         end = end or now
         start = start or (end - timedelta(hours=24))
 
@@ -125,21 +109,3 @@ class TelemetryService:
     async def get_current_readings(self) -> Sequence[Any]:
         """Latest reading for each device currently online (reported within the online window)."""
         return await self.repo.get_current_readings(ONLINE_WINDOW)
-
-    async def __get_location_name(self, device_id: int) -> str:
-        """
-        Internal helper to get location. 
-        Tries cache first, falls back to DB if missing.
-        """
-        if device_id in self._location_cache:
-            return self._location_cache[device_id]
-
-        device = await self.device_repo.get_by_id(device_id)
-        
-        location_name = "Unassigned"
-        if device and device.location:
-            location_name = device.location.display_name
-            
-        # 3. Update cache for next time
-        self._location_cache[device_id] = location_name
-        return location_name

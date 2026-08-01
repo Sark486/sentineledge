@@ -20,7 +20,7 @@ RETENTION_5M = timedelta(days=30)
 ONLINE_WINDOW = timedelta(minutes=10)
 
 
-class Interval(str, enum.Enum):
+class Interval(enum.StrEnum):
     ONE_MIN = "1m"
     FIVE_MIN = "5m"
     ONE_HOUR = "1h"
@@ -53,12 +53,13 @@ class ResolvedInterval:
 
 
 def default_for_duration(duration: timedelta) -> Interval:
-    """Readability default when the caller didn't request a specific interval."""
-    if duration <= timedelta(hours=20):
+    """Readability default when the caller didn't request a specific interval.
+
+    Must be monotonic: a longer range never resolves to a finer interval.
+    """
+    if duration <= timedelta(hours=6):
         return Interval.ONE_MIN
     if duration <= timedelta(days=2):
-        return Interval.ONE_HOUR
-    if duration <= timedelta(days=30):
         return Interval.FIVE_MIN
     return Interval.ONE_HOUR
 
