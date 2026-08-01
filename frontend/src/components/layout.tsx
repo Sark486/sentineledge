@@ -33,6 +33,9 @@ export function AppLayout() {
             <NavLink className={linkClass} to="/devices">
               🔧 Devices
             </NavLink>
+            <NavLink className={linkClass} to="/camera">
+              📹 Camera
+            </NavLink>
           </nav>
         </div>
       </header>

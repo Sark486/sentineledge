@@ -10,6 +10,10 @@ export default defineConfig({
         target: process.env.VITE_PROXY_TARGET ?? "http://localhost:8000",
         changeOrigin: true,
       },
+      "/cameras": {
+        target: process.env.VITE_CAMERA_PROXY_TARGET ?? "http://localhost:8090",
+        changeOrigin: true,
+      },
     },
   },
 });

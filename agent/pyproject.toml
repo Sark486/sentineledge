@@ -1,0 +1,18 @@
+[project]
+name = "sentinel-agent"
+version = "0.1.0"
+description = "SentinelEdge camera agent — runs on the Pi host, owns the camera sensor"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "pydantic-settings",
+    "opencv-python-headless",
+]
+
+# Standalone project — NOT a workspace member of the backend. The venv is created
+# with --system-site-packages to reach Debian's picamera2/libcamera:
+#   uv venv --python /usr/bin/python3 --system-site-packages agent/.venv
+#   uv pip install --python agent/.venv/bin/python -e agent
+# Never `uv sync` here: it can recreate the venv and drop system-site-packages.
