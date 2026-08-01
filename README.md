@@ -90,12 +90,21 @@ All endpoints are under `/api/v1`:
 - `GET /devices/` — list devices; `PATCH /devices/{id}` — update name/location/status
 - `GET /devices/{id}/latest` — latest reading for a device
 
+## Tests
+
+```bash
+uv run pytest                                                    # all tests
+uv run pytest --cov=app --cov=agent --cov-report=term-missing    # with coverage
+uv run pytest tests/services                                     # one directory
+```
+
+No database, MQTT broker or camera required.
+
 ## Development
 
 ```bash
 uv run ruff check app    # lint
 uv run mypy app          # type check
-uv run pytest            # tests
 
 cd frontend
 npm run lint             # eslint
@@ -110,5 +119,3 @@ uv run alembic revision --autogenerate -m "message"
 ```
 
 Note: Alembic autogenerate cannot emit TimescaleDB DDL (hypertables, continuous aggregates) — add those as raw `op.execute()` statements by hand. See `migrations/versions/98e6c996836c_*.py` for the pattern.
-
-Architecture notes for working in this codebase live in [CLAUDE.md](CLAUDE.md).

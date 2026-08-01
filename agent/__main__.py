@@ -1,3 +1,4 @@
+from fastapi.applications import FastAPI
 import logging
 
 import uvicorn
@@ -20,7 +21,7 @@ def main() -> None:
     power = PowerManager(settings, capture)
     mjpeg = MJPEGSink(settings)
     bus.register(mjpeg)
-    app = build_app(settings, capture, power, mjpeg)
+    app: FastAPI = build_app(settings, capture, power, mjpeg)
     uvicorn.run(app, host="0.0.0.0", port=settings.http_port, log_level="info")
 
 

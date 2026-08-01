@@ -9,7 +9,7 @@ from app.api.schemas import ClimateReadingRead, CurrentReadingRead, PaginatedRes
 router = APIRouter(prefix="/telemetry", tags=["Telemetry"])
 
 
-@router.get("", response_model=PaginatedResponse[ClimateReadingRead])
+@router.get("/", response_model=PaginatedResponse[ClimateReadingRead])
 async def list_telemetry(
     device_id: Optional[int] = Query(None, description="Filter by device ID"),
     location: Optional[str] = Query(None, description="Filter by location name"),

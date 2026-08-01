@@ -4,7 +4,6 @@ class Settings(BaseSettings):
     database_url: str
     redis_url: str
     mqtt_host: str
-    hardware_mode: str = "MOCK"
     API_V1_STR: str = "/api/v1"
 
     model_config = SettingsConfigDict(
@@ -14,4 +13,4 @@ class Settings(BaseSettings):
     )
         
 
-settings = Settings() # type: ignore
+settings = Settings() # type: ignore[call-arg]

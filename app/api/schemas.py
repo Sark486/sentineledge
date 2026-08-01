@@ -23,20 +23,20 @@ class LocationRead(LocationBase):
     id: int
 
 class DeviceBase(BaseModel):
-    display_name: Optional[str] | None = None
-    location: Optional[LocationBase] = None
-    status: Optional[str] | None = None
+    display_name: Optional[str] = None
 
 class DeviceCreate(DeviceBase):
     hardware_id: str
 
 class DeviceUpdate(DeviceBase):
     location_name: str
+    status: Optional[str] = None
 
 class DeviceRead(DeviceBase):
     id: int
     hardware_id: str
     status: str
+    location: Optional[LocationBase] = None
     last_seen: datetime | None
 
     model_config = ConfigDict(from_attributes=True)
