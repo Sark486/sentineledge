@@ -47,7 +47,7 @@ export function AppLayout() {
 
       {/* Footer */}
       <footer className="mt-16 border-t border-slate-200 bg-slate-50/50 py-8 text-center text-sm text-slate-500">
-        <p>© 2024 SentinelEdge • Smart Environment Monitoring System</p>
+        <p>© 2026 SentinelEdge • Smart Environment Monitoring System</p>
       </footer>
     </div>
   );
