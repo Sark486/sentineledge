@@ -2,14 +2,29 @@
 
 Home environment monitoring system running on a Raspberry Pi. IoT devices publish climate telemetry (temperature, humidity, pressure) over MQTT; a FastAPI backend ingests it into TimescaleDB; a React frontend displays metrics and manages devices.
 
+<img src="docs/images/dashboard.png" alt="SentinelEdge dashboard" width="400">
+
+## System overview
+
+SentinelEdge is a home environment monitoring system in two parts:
+
+- **sentineledge** (this repo) - Raspberry Pi gateway. FastAPI backend ingesting MQTT
+  telemetry into TimescaleDB, a React dashboard, and a camera agent.
+- **[sentineledge-firmware](https://github.com/Sark486/sentineledge-firmware)** -
+  ESP32-C3 sensor nodes in C++. AHT20 and BMP280 over I2C, publishing JSON once a minute.
+
+Nodes publish to `sentinel/devices/<hardware_id>/telemetry`; this repo ingests, stores and
+serves that data.
+
 ## Features
 
-- **MQTT telemetry ingestion** — devices publish to `sentinel/devices/<hardware_id>/telemetry`; unknown devices are auto-registered and held in `pending` until approved.
-- **Device lifecycle management** — devices move `pending` → `active` / `blocked` from the frontend; telemetry is only persisted for `active` devices.
-- **Time-series storage** — TimescaleDB hypertable for raw readings, with `climate_5m` and `climate_1h` continuous aggregates for downsampled queries.
-- **Location tracking** — each reading stores a snapshot of the device's location name at write time, so history stays accurate after a device moves.
-- **Camera agent** — a separate process (`agent/`) that owns the Pi camera and serves MJPEG streams and snapshots, powering the sensor only while someone is watching.
-- **Web dashboard** — metrics charts/tables with filtering, plus device management (React + TypeScript, polling-based updates).
+- **MQTT telemetry ingestion** - devices publish to `sentinel/devices/<hardware_id>/telemetry`; unknown devices are auto-registered and held in `pending` until approved.
+- **Device identity from the topic** - the hardware id is always taken from the MQTT topic and any `source` field in the payload is ignored, so one device cannot publish telemetry as another.
+- **Device lifecycle management** - devices move `pending` → `active` / `blocked` from the frontend; telemetry is only persisted for `active` devices.
+- **Time-series storage** - TimescaleDB hypertable for raw readings, with `climate_5m` and `climate_1h` continuous aggregates for downsampled queries.
+- **Location tracking** - each reading stores a snapshot of the device's location name at write time, so history stays accurate after a device moves.
+- **Camera agent** - a separate process (`agent/`) that owns the Pi camera and serves MJPEG streams and snapshots, powering the sensor only while someone is watching.
+- **Web dashboard** - metrics charts/tables with filtering, plus device management (React + TypeScript, polling-based updates).
 
 ## Stack
 
@@ -22,7 +37,52 @@ Home environment monitoring system running on a Raspberry Pi. IoT devices publis
 | Camera agent | Picamera2, OpenCV, FastAPI (its own project under `agent/`) |
 | Tooling | uv, ruff, mypy, pytest |
 
-## How to deploy and run
+## Design notes
+
+**TimescaleDB with continuous aggregates rather than plain Postgres.** Raw readings land in
+a `climate_readings` hypertable; `climate_5m` and `climate_1h` are continuous aggregates
+kept current by refresh policies, and retention policies drop raw rows after 7 days and
+5-minute rollups after 30, leaving hourly history indefinitely - rollups, refresh schedule
+and retention are all declarative Timescale policies rather than hand-rolled jobs (see
+`migrations/versions/98e6c996836c_*.py`). `/telemetry/series` reads from that ladder:
+`resolve_interval` coarsens the requested (or range-derived) interval to the finest one
+retention can still serve for the range, and reports `downgraded: true` when it had to
+(`app/domain/intervals.py`). Both aggregates run with `materialized_only = false` so a
+chart ending at "now" still gets the buckets the refresh policy has not materialised yet.
+
+**The `pending` → `active` / `blocked` device lifecycle.** The MQTT hub takes the hardware
+id from the topic and calls `get_or_create_device`, so a device it has never heard of is
+registered on its first publish with status `pending` - that registration is what makes it
+appear on the Devices page for an operator to approve. Until it is `active` its readings
+are dropped and its `last_seen` is left untouched; a `blocked` device stays registered, so
+it is not re-created by the next message it sends. The broker accepts anonymous publishes
+(`mosquitto/config/mosquitto.conf`), so this status gate is the only thing standing between
+an arbitrary publisher on the network and the readings table.
+
+**Location snapshotting at write time.** Every `climate_readings` row carries a
+`location_snapshot` string, read from the device's current location on each write
+(`TelemetryService.save_telemetry`) instead of being resolved by joining `devices` →
+`locations` at read time. The continuous aggregates group by that column and the
+`?location=` filters compare against it, so history stays filed under the location a
+reading was actually taken in after the device moves. The trade-off is that the name is
+frozen per row: moving a device or renaming a location splits its history across two names,
+and there is no path to re-attribute the old rows. `/telemetry/latest` is the exception -
+it joins the device's current `Location`, so it reports where a device is now.
+
+**The camera agent as a separate host process with a viewer lease.** `CaptureController`
+owns the sensor on one long-lived thread because Picamera2 open/close and `capture_arrays()`
+block; the asyncio side only flips `set_desired()`. Power is decided from leases rather
+than a viewer refcount: a lease is renewed only by a frame the server successfully wrote to
+that viewer's socket, so a dead viewer stops renewing and ages out after `lease_ttl_s`
+(5s) - as `PowerManager` puts it, no code path can leak a viewer. Creating a lease counts
+as a write, since the sensor must come up before any real frame can renew it, and when the
+last lease dies the sensor is held for `power_off_grace_s` (10s) so a page refresh does not
+power-cycle it. Snapshots take the same kind of lease under a `snapshot-` id and always
+drop it in a `finally`.
+
+## Quick start (on the Raspberry Pi)
+
+Running the full system on the target device. Start here.
 
 First-time setup (or after pulling changes that touch dependencies/migrations):
 
@@ -31,7 +91,7 @@ First-time setup (or after pulling changes that touch dependencies/migrations):
 ```
 
 This starts the database and MQTT broker, applies migrations, and builds the backend/frontend
-images. It does not start the application itself, so it's safe to re-run any time — it's
+images. It does not start the application itself, so it's safe to re-run any time - it's
 idempotent.
 
 Then, day to day:
@@ -51,10 +111,12 @@ container) and keeps running after you close the terminal. To control it on its 
 
 Agent output is logged to `scripts/logs/agent.log`.
 
-See "Getting started" below to run pieces individually, e.g. with the backend/frontend on the
-host instead of in containers.
+See "Development setup" below to run pieces individually, e.g. with the backend/frontend on
+the host instead of in containers.
 
-## Getting started
+## Development setup (on your own machine)
+
+Running individual components on a host machine for development.
 
 ### Prerequisites
 
@@ -70,7 +132,7 @@ docker compose up -d db mosquitto
 
 This starts TimescaleDB on `5432` and Mosquitto on `1883`. A bare `docker compose up -d`
 also builds and runs the `backend` and `frontend` services in containers, which point at
-`db:5432` rather than `localhost` — use that only if you don't want to run the backend on
+`db:5432` rather than `localhost` - use that only if you don't want to run the backend on
 the host.
 
 ### 2. Configure the backend
@@ -108,6 +170,10 @@ Open `http://localhost:5173`. See [frontend/README.md](frontend/README.md) for d
 
 ## Sending telemetry
 
+Sensor nodes are ESP32-C3 devices running
+[sentineledge-firmware](https://github.com/Sark486/sentineledge-firmware). The
+`mosquitto_pub` command below is for testing the ingestion path without hardware.
+
 Devices publish JSON to `sentinel/devices/<hardware_id>/telemetry`:
 
 ```bash
@@ -115,7 +181,7 @@ mosquitto_pub -h localhost -t "sentinel/devices/my-sensor-01/telemetry" \
   -m '{"temperature": 21.4, "humidity": 45.2, "pressure": 1013.25}'
 ```
 
-First publish auto-registers the device with status `pending`. Approve it on the dashboard's Devices tab (or `PATCH /api/v1/devices/{id}` with `{"status": "active"}`) — only then are its readings stored.
+First publish auto-registers the device with status `pending`. Approve it on the dashboard's Devices tab (or `PATCH /api/v1/devices/{id}` with `{"status": "active"}`) - only then are its readings stored.
 
 A `source` field in the payload is ignored: the hardware id always comes from the topic, so one device cannot publish as another.
 
@@ -132,12 +198,12 @@ All endpoints are under `/api/v1`:
 | `GET /telemetry/by-location/{name}` | As `GET /telemetry`, with the location fixed by the path |
 | `GET /devices` | List devices |
 | `GET /devices/{id}` | One device |
-| `PATCH /devices/{id}` | Update name, location and/or status — every field is optional |
+| `PATCH /devices/{id}` | Update name, location and/or status - every field is optional |
 | `GET /devices/{id}/latest` | Latest reading for a device; empty for a device that has never reported |
 
 ## Camera agent
 
-`agent/` is a standalone process that runs **on the Pi host**, not in Docker — the backend
+`agent/` is a standalone process that runs **on the Pi host**, not in Docker - the backend
 container has no access to `/dev/video*`. It owns the camera exclusively and exposes MJPEG
 streaming, snapshots and `/health` on port 8090. The sensor is powered only while a viewer
 holds a live lease, with a grace period so a page refresh doesn't power-cycle it.
@@ -181,4 +247,4 @@ Creating a migration:
 uv run alembic revision --autogenerate -m "message"
 ```
 
-Note: Alembic autogenerate cannot emit TimescaleDB DDL (hypertables, continuous aggregates) — add those as raw `op.execute()` statements by hand. See `migrations/versions/98e6c996836c_*.py` for the pattern.
+Note: Alembic autogenerate cannot emit TimescaleDB DDL (hypertables, continuous aggregates) - add those as raw `op.execute()` statements by hand. See `migrations/versions/98e6c996836c_*.py` for the pattern.
